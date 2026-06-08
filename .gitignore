@@ -103,3 +103,10 @@ Thumbs.db
 
 # Docs
 docs
+
+# Local custom config and assets
+high_quality_feeds.opml
+web-index.html
+admin-index.html
+favicon.ico
+

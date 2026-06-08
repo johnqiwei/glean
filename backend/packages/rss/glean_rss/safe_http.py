@@ -382,11 +382,17 @@ class SSRFSafeTransport(httpx.AsyncBaseTransport):
         if scheme == "https":
             extensions["sni_hostname"] = hostname.encode("ascii")
 
+        # Read the content if it's not already read, to avoid RequestNotRead error on redirects
+        try:
+            req_content = request.content
+        except httpx.RequestNotRead:
+            req_content = await request.aread()
+
         pinned_request = httpx.Request(
             method=request.method,
             url=pinned_url,
             headers=request.headers,  # Host header already set to original
-            content=request.content,
+            content=req_content,
             extensions=extensions,
         )
 

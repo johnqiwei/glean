@@ -75,8 +75,14 @@ services:
       LOG_RETENTION: ${LOG_RETENTION:-30 days}
       LOG_COMPRESSION: ${LOG_COMPRESSION:-gz}
       LOG_SERIALIZE: ${LOG_SERIALIZE:-false}
+      # Embedding configuration
+      HF_HOME: /app/model_cache
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-sentence-transformers}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
     volumes:
       - glean_logs:/app/logs
+      - hf_cache:/app/model_cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,8 +118,14 @@ services:
       LOG_RETENTION: ${LOG_RETENTION:-30 days}
       LOG_COMPRESSION: ${LOG_COMPRESSION:-gz}
       LOG_SERIALIZE: ${LOG_SERIALIZE:-false}
+      # Embedding configuration
+      HF_HOME: /app/model_cache
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-sentence-transformers}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
     volumes:
       - glean_logs:/app/logs
+      - hf_cache:/app/model_cache
     depends_on:
       postgres:
         condition: service_healthy
@@ -135,6 +147,9 @@ services:
       - "${WEB_PORT:-80}:80"
     depends_on:
       - backend
+    volumes:
+      - ./web-index.html:/usr/share/nginx/html/index.html:ro
+      - ./favicon.ico:/usr/share/nginx/html/favicon.ico:ro
     networks:
       - glean-network
     restart: unless-stopped
@@ -146,6 +161,9 @@ services:
       - "${ADMIN_PORT:-3001}:80"
     depends_on:
       - backend
+    volumes:
+      - ./admin-index.html:/usr/share/nginx/html/index.html:ro
+      - ./favicon.ico:/usr/share/nginx/html/favicon.ico:ro
     networks:
       - glean-network
     restart: unless-stopped
@@ -222,6 +240,7 @@ volumes:
   milvus_etcd_data:
   milvus_minio_data:
   milvus_data:
+  hf_cache:
 
 networks:
   glean-network:
