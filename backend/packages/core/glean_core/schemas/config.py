@@ -197,3 +197,54 @@ class RegistrationConfig(BaseModel):
     NAMESPACE: ClassVar[str] = "registration"
 
     enabled: bool = True  # Registration enabled by default
+
+
+class DigestConfig(BaseModel):
+    """
+    Daily digest configuration.
+
+    Stored in system_configs table with key = NAMESPACE.
+    """
+
+    NAMESPACE: ClassVar[str] = "digest"
+
+    enabled: bool = False
+    user_ids: list[str] = Field(default_factory=list)
+    timezone: str = "Asia/Singapore"
+    daily_hour: int = 8
+    lookback_hours: int = 24
+    top_per_category: int = 10
+    candidate_limit_per_category: int = 200
+    min_score: float | None = None
+    avoid_duplicate_entries: bool = True
+    duplicate_lookback_days: int = 90
+    exclude_read_entries: bool = True
+    llm_provider: str = "openai_compatible"
+    llm_model: str = "deepseek-v4-flash"
+    llm_api_key: str | None = None
+    llm_base_url: str | None = "https://api.deepseek.com"
+    translation_provider: str = "llm"
+
+
+class FeishuConfig(BaseModel):
+    """
+    Feishu integration configuration.
+
+    Stored in system_configs table with key = NAMESPACE.
+    """
+
+    NAMESPACE: ClassVar[str] = "feishu"
+
+    enabled: bool = False
+    webhook_url: str | None = None
+    webhook_secret: str | None = None
+    app_id: str | None = None
+    app_secret: str | None = None
+    verification_token: str | None = None
+    encrypt_key: str | None = None
+    news_chat_id: str | None = None
+    allowed_user_ids: list[str] = Field(default_factory=list)
+    receive_mode: str = "webhook"  # webhook / websocket
+    require_mention: bool = True
+    user_chat_mappings: dict[str, str] = Field(default_factory=dict)
+

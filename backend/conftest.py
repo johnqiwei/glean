@@ -40,6 +40,27 @@ class MockArqRedis:
         """Mock enqueue_job that records calls without actually queuing."""
         self.enqueued_jobs.append((func_name, args))
 
+    async def set(
+        self,
+        name: str,
+        value: Any,
+        ex: int | None = None,
+        px: int | None = None,
+        nx: bool = False,
+        xx: bool = False,
+        keepttl: bool = False,
+    ) -> bool | None:
+        if nx and name in self._store:
+            return None
+        if xx and name not in self._store:
+            return None
+        self._store[name] = value
+        if ex is not None:
+            self._ttl[name] = ex
+        elif px is not None:
+            self._ttl[name] = px // 1000
+        return True
+
     async def setex(self, key: str, ttl_seconds: int, value: Any) -> bool:
         self._store[key] = value
         self._ttl[key] = ttl_seconds

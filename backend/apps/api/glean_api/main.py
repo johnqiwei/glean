@@ -31,6 +31,7 @@ from .routers import (
     bookmarks,
     entries,
     feeds,
+    feishu,
     folders,
     preference,
     system,
@@ -77,6 +78,7 @@ def get_oss_routers() -> list[RouterConfig]:
         (preference.router, "/api/preference", ["Preference"]),
         (system.router, "/api/system", ["System"]),
         (api_tokens.router, "/api/tokens", ["API Tokens"]),
+        (feishu.router, "/api/integrations/feishu", ["Feishu"]),
     ]
 
 

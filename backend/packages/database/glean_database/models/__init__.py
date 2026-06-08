@@ -8,6 +8,7 @@ from .admin import AdminRole, AdminUser, SystemConfig
 from .api_token import APIToken
 from .base import Base, TimestampMixin
 from .bookmark import Bookmark
+from .digest import DigestItem, DigestRun
 from .entry import Entry
 from .feed import Feed, FeedStatus
 from .folder import Folder, FolderType
@@ -44,4 +45,7 @@ __all__ = [
     "UserPreferenceStats",
     # MCP models
     "APIToken",
+    # Digest models
+    "DigestRun",
+    "DigestItem",
 ]

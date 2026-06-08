@@ -20,6 +20,7 @@ from .config import settings
 from .tasks import (
     bookmark_metadata,
     cleanup,
+    daily_digest,
     embedding_rebuild,
     embedding_worker,
     feed_fetcher,
@@ -137,6 +138,8 @@ def get_oss_functions() -> list[TaskFunction]:
         preference_worker.rebuild_user_preference,
         # Subscription cleanup
         subscription_cleanup.cleanup_orphan_embeddings,
+        # Daily digest tasks
+        daily_digest.generate_daily_digest,
     ]
 
 
@@ -147,6 +150,8 @@ def get_oss_cron_jobs() -> list[CronJob]:
         cron(feed_fetcher.scheduled_fetch, minute={0, 15, 30, 45}),
         # Read-later cleanup (hourly at minute 0)
         cron(cleanup.scheduled_cleanup, minute=0),
+        # Scheduled daily news digest (hourly)
+        cron(daily_digest.scheduled_daily_digest, minute=0),
     ]
 
 
