@@ -235,7 +235,7 @@ class DailyDigestService:
                 # Process summaries, translations and prepare DigestItems
                 category_items: list[DigestItem] = []
                 for rank, (entry, score) in enumerate(selected, start=1):
-                    code = f"N{code_counter:02d}"
+                    code = f"n{code_counter:02d}"
                     code_counter += 1
 
                     # Generate Chinese title and summary

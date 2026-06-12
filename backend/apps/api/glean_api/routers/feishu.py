@@ -205,7 +205,7 @@ async def handle_feishu_events(
         if not match:
             return {"status": "no_code_found"}
 
-        code = match.group(0).upper()
+        code = match.group(0).lower()
 
         # 4e. Find the latest digest run sent to this chat
         run_stmt = select(DigestRun).where(
