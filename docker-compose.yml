@@ -148,7 +148,6 @@ services:
     depends_on:
       - backend
     volumes:
-      - ./web-index.html:/usr/share/nginx/html/index.html:ro
       - ./favicon.ico:/usr/share/nginx/html/favicon.ico:ro
     networks:
       - glean-network
@@ -162,7 +161,6 @@ services:
     depends_on:
       - backend
     volumes:
-      - ./admin-index.html:/usr/share/nginx/html/index.html:ro
       - ./favicon.ico:/usr/share/nginx/html/favicon.ico:ro
     networks:
       - glean-network
