@@ -103,7 +103,7 @@ async def test_feishu_message_receive_lazy_translate(client: AsyncClient, db_ses
         folder_id=None,
         category_name="Unclassified",
         entry_id=entry.id,
-        code="N01",
+        code="n01",
         rank=1,
         score=95.0,
         title_zh="打破性的科技新闻",
@@ -173,7 +173,7 @@ async def test_feishu_message_receive_lazy_translate(client: AsyncClient, db_ses
 
     assert response.status_code == 200
     assert response.json()["status"] == "processed"
-    assert response.json()["code"] == "N01"
+    assert response.json()["code"] == "n01"
 
     # 5. Check if lazy translation was triggered and database was updated
     await db_session.refresh(item)
@@ -183,3 +183,126 @@ async def test_feishu_message_receive_lazy_translate(client: AsyncClient, db_ses
     # Check if reply_text_message was invoked
     assert mock_reply.called
     assert "这是翻译后的完整中文内容。" in mock_reply.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_internal_feishu_callback_unauthorized(client: AsyncClient, setup_feishu_config, monkeypatch):
+    """Test accessing the internal callback endpoint without a valid token."""
+    from glean_api.config import settings
+    monkeypatch.setattr(settings, "feishu_dispatcher_callback_token", "test_internal_token")
+
+    payload = {
+        "message_id": "om_message_456",
+        "chat_id": "chat_test_123",
+        "text": "@Glean n01",
+    }
+
+    # Missing credentials
+    response = await client.post("/api/internal/feishu/messages", json=payload)
+    assert response.status_code == 401
+
+    # Invalid token
+    headers = {"Authorization": "Bearer wrong_token"}
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_internal_feishu_callback_success(
+    client: AsyncClient, db_session, setup_feishu_config, monkeypatch, tmp_path
+):
+    """Test successful processing through the internal endpoint writing outbox files."""
+    import os
+
+    # 1. Setup user, feed, entry, digest_run, and digest_item
+    user = User(
+        id="user_test_123",
+        email="feishu.user@example.com",
+        name="Feishu User",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    feed = Feed(url="https://feed.example.com", title="Feishu Feed")
+    db_session.add(feed)
+    await db_session.commit()
+
+    entry = Entry(
+        feed_id=feed.id,
+        url="https://article.example.com/1",
+        title="Breaking Tech News",
+        content="<p>This is the full article text in English that needs translation.</p>",
+        embedding_status="done"
+    )
+    db_session.add(entry)
+    await db_session.commit()
+
+    run = DigestRun(
+        user_id=user.id,
+        window_start=datetime.now() - timedelta(hours=24),
+        window_end=datetime.now(),
+        status="sent",
+        target_channel="feishu",
+        feishu_chat_id="chat_test_123"
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    item = DigestItem(
+        run_id=run.id,
+        user_id=user.id,
+        folder_id=None,
+        category_name="Unclassified",
+        entry_id=entry.id,
+        code="n01",
+        rank=1,
+        score=95.0,
+        title_zh="打破性的科技新闻",
+        summary_zh="关于科技的简短摘要。",
+        fulltext_zh=None,
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    # Mock settings and LLM call
+    from glean_api.config import settings
+    monkeypatch.setattr(settings, "feishu_dispatcher_callback_token", "test_internal_token")
+    monkeypatch.setattr(settings, "feishu_dispatcher_outbox_dir", str(tmp_path))
+
+    mock_llm_call = AsyncMock(return_value="这是翻译后的完整中文内容。")
+    monkeypatch.setattr(
+        "glean_core.services.article_language_service.ArticleLanguageService._call_llm",
+        mock_llm_call
+    )
+
+    payload = {
+        "message_id": "om_message_789",
+        "chat_id": "chat_test_123",
+        "text": "@Glean n01",
+        "sender": {
+            "open_id": "usr_test_123",
+            "user_id": "usr_test_123"
+        }
+    }
+    headers = {"Authorization": "Bearer test_internal_token"}
+
+    # Post message
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "processed"
+    assert data["code"] == "n01"
+    assert data["outbox_file"] is not None
+
+    # Check that outbox file exists and contains correct translation text
+    outbox_file = data["outbox_file"]
+    assert os.path.exists(outbox_file)
+    with open(outbox_file, "r", encoding="utf-8") as f:
+        content = f.read()
+        assert "这是翻译后的完整中文内容。" in content
+
+    # Test deduplication
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "deduplicated"

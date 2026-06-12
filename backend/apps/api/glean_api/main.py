@@ -79,6 +79,7 @@ def get_oss_routers() -> list[RouterConfig]:
         (system.router, "/api/system", ["System"]),
         (api_tokens.router, "/api/tokens", ["API Tokens"]),
         (feishu.router, "/api/integrations/feishu", ["Feishu"]),
+        (feishu.internal_router, "/api/internal/feishu", ["Feishu Internal"]),
     ]
 
 

@@ -58,6 +58,7 @@ from .tag import (
     TagWithCountsResponse,
 )
 from .user import UserResponse, UserUpdate
+from .feishu import FeishuDigestMessage, FeishuDigestProcessResult, FeishuDigestSender
 
 __all__ = [
     # API Token
@@ -119,4 +120,8 @@ __all__ = [
     "ValidationResult",
     "VectorizationStatus",
     "VectorizationStatusResponse",
+    # Feishu Callback Schemas
+    "FeishuDigestMessage",
+    "FeishuDigestProcessResult",
+    "FeishuDigestSender",
 ]

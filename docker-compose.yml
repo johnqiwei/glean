@@ -83,6 +83,7 @@ services:
     volumes:
       - glean_logs:/app/logs
       - hf_cache:/app/model_cache
+      - /workspace/ocworkspace/feishu_outbox:/workspace/ocworkspace/feishu_outbox
     depends_on:
       postgres:
         condition: service_healthy

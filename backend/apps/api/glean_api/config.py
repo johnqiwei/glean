@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     # CORS settings
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 
+    # Feishu Callback settings
+    feishu_dispatcher_outbox_dir: str = "/workspace/ocworkspace/feishu_outbox"
+    feishu_dispatcher_callback_token: str | None = None
+
     # MCP Server settings
     mcp_issuer_url: str = "http://localhost:8000"
     mcp_resource_server_url: str = "http://localhost:8000/mcp"

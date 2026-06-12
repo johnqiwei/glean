@@ -13,6 +13,7 @@ from .daily_digest_service import DailyDigestService
 from .entry_service import EntryService
 from .feed_service import FeedService
 from .feishu_bot_client import FeishuBotClient
+from .feishu_digest_event_service import FeishuDigestEventService
 from .folder_service import FolderService
 from .preference_service import PreferenceService
 from .simple_score_service import SimpleScoreService
@@ -30,6 +31,7 @@ __all__ = [
     "FeedService",
     "EntryService",
     "FeishuBotClient",
+    "FeishuDigestEventService",
     "DailyDigestService",
     # M2 services
     "BookmarkService",
