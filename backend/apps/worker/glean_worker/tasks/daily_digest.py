@@ -41,24 +41,24 @@ async def generate_daily_digest(ctx: dict[str, Any], user_id: str | None = None)
     Worker task to generate and send daily digests.
     """
     logger.info("Starting generate_daily_digest task", extra={"user_id": user_id})
-    
+
     async with get_session_context() as session:
         config_service = TypedConfigService(session)
         digest_config = await config_service.get(DigestConfig)
-        
+
         if not digest_config.enabled:
             logger.info("Daily digest features are disabled in config")
             return {"status": "disabled"}
-            
+
         # Determine target user IDs
         target_users = [user_id] if user_id else digest_config.user_ids
         if not target_users:
             logger.info("No target users configured for daily digest")
             return {"status": "no_users"}
-            
+
         digest_service = DailyDigestService(session)
         score_service = await _resolve_score_service(ctx, session)
-        
+
         runs_created = 0
         for uid in target_users:
             logger.info("Triggering digest run for user", extra={"user_id": uid})
@@ -66,9 +66,9 @@ async def generate_daily_digest(ctx: dict[str, Any], user_id: str | None = None)
                 run = await digest_service.generate_digest_for_user(uid, score_service)
                 if run:
                     runs_created += 1
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to generate digest for user", extra={"user_id": uid})
-                
+
         return {"status": "success", "runs_created": runs_created}
 
 
@@ -78,23 +78,23 @@ async def scheduled_daily_digest(ctx: dict[str, Any]) -> dict[str, Any]:
     Runs every hour.
     """
     logger.info("Running scheduled_daily_digest check")
-    
+
     async with get_session_context() as session:
         config_service = TypedConfigService(session)
         digest_config = await config_service.get(DigestConfig)
-        
+
         if not digest_config.enabled:
             return {"status": "disabled"}
-            
+
         # Parse local time for the configured timezone
         try:
             tz = zoneinfo.ZoneInfo(digest_config.timezone)
         except Exception as tz_err:
             logger.error("Invalid timezone configured, falling back to UTC", extra={"timezone": digest_config.timezone, "error": str(tz_err)})
             tz = zoneinfo.ZoneInfo("UTC")
-            
+
         local_now = datetime.now(tz)
-        
+
         # Check if the current hour matches the configured hour
         if local_now.hour != digest_config.daily_hour:
             logger.debug(
@@ -102,11 +102,11 @@ async def scheduled_daily_digest(ctx: dict[str, Any]) -> dict[str, Any]:
                 extra={"current_hour": local_now.hour, "daily_hour": digest_config.daily_hour},
             )
             return {"status": "wrong_hour"}
-            
+
         # Use Redis lock to make sure we only execute once per calendar day per user
         redis = ctx["redis"]
         local_date_str = local_now.strftime("%Y-%m-%d")
-        
+
         triggered_users = []
         for uid in digest_config.user_ids:
             lock_key = f"digest:daily:{uid}:{local_date_str}"
@@ -118,5 +118,5 @@ async def scheduled_daily_digest(ctx: dict[str, Any]) -> dict[str, Any]:
                 triggered_users.append(uid)
             else:
                 logger.info("Daily digest already run for user today", extra={"user_id": uid, "date": local_date_str})
-                
+
         return {"status": "checked", "triggered_users": triggered_users}

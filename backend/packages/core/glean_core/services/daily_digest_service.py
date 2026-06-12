@@ -6,7 +6,7 @@ summarization, database recording, and dispatching to Feishu.
 """
 
 from datetime import UTC, datetime, timedelta
-from typing import Any, ClassVar, TypeVar
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +16,15 @@ from glean_core.schemas.config import DigestConfig, FeishuConfig
 from glean_core.services.article_language_service import ArticleLanguageService
 from glean_core.services.feishu_bot_client import FeishuBotClient
 from glean_core.services.typed_config_service import TypedConfigService
-from glean_database.models import DigestItem, DigestRun, Entry, Folder, Subscription, UserEntry, Feed
+from glean_database.models import (
+    DigestItem,
+    DigestRun,
+    Entry,
+    Feed,
+    Folder,
+    Subscription,
+    UserEntry,
+)
 
 logger = get_logger(__name__)
 
@@ -150,12 +158,13 @@ class DailyDigestService:
                 DigestItem.user_id == user_id,
                 DigestItem.created_at >= lookback_limit,
             )
-            
+
             # Helper objects
             lang_service = ArticleLanguageService(digest_config)
             feishu_client = FeishuBotClient(feishu_config)
-            
-            digest_items_to_save: list[DigestItem] = []
+
+            sent_items_to_save: list[DigestItem] = []
+            dispatch_failures = 0
             code_counter = 1
 
             for category_name, feed_ids in category_to_feeds.items():
@@ -163,7 +172,7 @@ class DailyDigestService:
                     "Processing candidates for category",
                     extra={"category": category_name, "feeds_count": len(feed_ids)},
                 )
-                
+
                 # Fetch entry candidates
                 stmt = select(Entry, Feed.title.label("feed_title")).join(Feed, Entry.feed_id == Feed.id).outerjoin(
                     UserEntry,
@@ -232,7 +241,7 @@ class DailyDigestService:
                     # Generate Chinese title and summary
                     logger.info("Summarizing article", extra={"entry_id": entry.id, "code": code})
                     summary_zh = await lang_service.summarize_to_zh(entry)
-                    
+
                     # We also translate the title using DeepSeek for a fully Chinese report
                     title_zh = entry.title
                     try:
@@ -267,13 +276,12 @@ class DailyDigestService:
                         summary_zh=summary_zh,
                     )
                     category_items.append(item)
-                    digest_items_to_save.append(item)
 
                 # Send category message to Feishu (one Feishu message per category)
                 if category_items:
                     # Construct Feishu post elements
                     post_content: list[list[dict[str, Any]]] = []
-                    
+
                     for item in category_items:
                         # Find original entry object to link it
                         orig_entry = next(entry for entry, _ in selected if entry.id == item.entry_id)
@@ -310,19 +318,24 @@ class DailyDigestService:
                         )
                         for item in category_items:
                             item.feishu_message_id = feishu_msg_id
+                        sent_items_to_save.extend(category_items)
                     except Exception as dispatch_err:
+                        dispatch_failures += 1
                         logger.error(
                             "Failed to dispatch Feishu message for category",
                             extra={"category": category_name, "error": str(dispatch_err)},
                         )
 
             # Persist items to database
-            if digest_items_to_save:
-                self.db.add_all(digest_items_to_save)
-                run.status = "sent"
+            if sent_items_to_save:
+                self.db.add_all(sent_items_to_save)
+                run.status = "partial_failed" if dispatch_failures else "sent"
             else:
-                run.status = "sent"
-                logger.info("No items qualified for this digest run")
+                run.status = "failed" if dispatch_failures else "sent"
+                if dispatch_failures:
+                    run.error_message = "All Feishu dispatch attempts failed"
+                else:
+                    logger.info("No items qualified for this digest run")
 
             await self.db.commit()
             return run

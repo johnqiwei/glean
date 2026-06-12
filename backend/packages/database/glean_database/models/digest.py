@@ -3,9 +3,8 @@ Digest-related database models.
 """
 
 from datetime import datetime
-from typing import Any
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, Index
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin, generate_uuid
@@ -43,7 +42,12 @@ class DigestRun(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint(
-            "user_id", "window_start", "window_end", "target_channel", name="uq_digest_run_window"
+            "user_id",
+            "window_start",
+            "window_end",
+            "target_channel",
+            "feishu_chat_id",
+            name="uq_digest_run_window",
         ),
     )
 

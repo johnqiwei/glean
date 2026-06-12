@@ -5,14 +5,16 @@ Handles webhook event callbacks from Feishu (Lark), including challenge verifica
 event decryption, event signature verification, and short-code article retrieval.
 """
 
+import hmac
 import json
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
+
+from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from arq.connections import ArqRedis
 
 from glean_core.schemas.config import DigestConfig, FeishuConfig
 from glean_core.services.article_language_service import ArticleLanguageService
@@ -27,6 +29,33 @@ router = APIRouter()
 
 # Regular expression to match N01, N02... code pattern (case insensitive)
 CODE_PATTERN = re.compile(r"\b[nN]\d{2}\b")
+MENTION_TEXT_PATTERN = re.compile(r"^\s*@\S+")
+
+
+def _payload_token(payload: dict[str, Any]) -> str | None:
+    header = payload.get("header")
+    if isinstance(header, dict) and header.get("token"):
+        return str(header["token"])
+    token = payload.get("token")
+    return str(token) if token else None
+
+
+def _verify_verification_token(payload: dict[str, Any], config: FeishuConfig) -> None:
+    if not config.verification_token:
+        return
+    token = _payload_token(payload)
+    if token is None or not hmac.compare_digest(token, config.verification_token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Feishu verification token mismatch",
+        )
+
+
+def _message_mentions_bot(message: dict[str, Any], text_content: str) -> bool:
+    mentions = message.get("mentions")
+    if isinstance(mentions, list) and mentions:
+        return True
+    return MENTION_TEXT_PATTERN.search(text_content) is not None
 
 
 @router.post("/events")
@@ -40,17 +69,17 @@ async def handle_feishu_events(
 ) -> dict[str, Any]:
     """
     Feishu Event Subscription Endpoint.
-    
+
     Verifies URL challenges, authenticates signature headers, decrypts payloads
     when configured, and responds to message callbacks.
     """
     body_bytes = await request.body()
-    
+
     # Parse initial JSON payload
     try:
         payload = json.loads(body_bytes)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    except json.JSONDecodeError as err:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from err
 
     # Load configurations
     config_service = TypedConfigService(session)
@@ -61,6 +90,11 @@ async def handle_feishu_events(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Feishu integration is disabled",
+        )
+    if not feishu_config.verification_token and not feishu_config.encrypt_key:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Feishu callback authentication is not configured",
         )
 
     feishu_client = FeishuBotClient(feishu_config)
@@ -74,13 +108,14 @@ async def handle_feishu_events(
                 detail="Encryption key not configured on server",
             )
         try:
-            decrypted_payload = feishu_client.decrypt_payload(payload["encrypt"])
-            payload = json.loads(decrypted_str := decrypted_payload)
+            payload = feishu_client.decrypt_payload(payload["encrypt"])
         except Exception as decrypt_err:
             raise HTTPException(
                 status_code=400,
                 detail=f"Failed to decrypt payload: {decrypt_err}",
-            )
+            ) from decrypt_err
+
+    _verify_verification_token(payload, feishu_config)
 
     # 2. Handle URL Verification Challenge
     if payload.get("type") == "url_verification":
@@ -117,7 +152,7 @@ async def handle_feishu_events(
         event_data = payload.get("event", {})
         message = event_data.get("message", {})
         message_id = message.get("message_id")
-        
+
         if not message_id:
             return {"status": "ignored"}
 
@@ -154,13 +189,16 @@ async def handle_feishu_events(
         # Check allowed user ids (open_id or user_id)
         if feishu_config.allowed_user_ids:
             is_allowed = False
-            if open_id and open_id in feishu_config.allowed_user_ids:
+            if (open_id and open_id in feishu_config.allowed_user_ids) or (
+                user_id and user_id in feishu_config.allowed_user_ids
+            ):
                 is_allowed = True
-            elif user_id and user_id in feishu_config.allowed_user_ids:
-                is_allowed = True
-            
+
             if not is_allowed:
                 return {"status": "user_not_allowed"}
+
+        if feishu_config.require_mention and not _message_mentions_bot(message, text_content):
+            return {"status": "mention_required"}
 
         # 4d. Parse code (e.g. N01)
         match = CODE_PATTERN.search(text_content)
@@ -172,9 +210,9 @@ async def handle_feishu_events(
         # 4e. Find the latest digest run sent to this chat
         run_stmt = select(DigestRun).where(
             DigestRun.feishu_chat_id == chat_id,
-            DigestRun.status == "sent",
+            DigestRun.status.in_(("sent", "partial_failed")),
         ).order_by(desc(DigestRun.created_at)).limit(1)
-        
+
         run_res = await session.execute(run_stmt)
         latest_run = run_res.scalar_one_or_none()
 
@@ -206,7 +244,7 @@ async def handle_feishu_events(
             entry_stmt = select(Entry).where(Entry.id == digest_item.entry_id)
             entry_res = await session.execute(entry_stmt)
             entry = entry_res.scalar_one_or_none()
-            
+
             if not entry:
                 await feishu_client.reply_text_message(
                     message_id,

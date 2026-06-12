@@ -47,7 +47,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
-            "user_id", "window_start", "window_end", "target_channel", name="uq_digest_run_window"
+            "user_id",
+            "window_start",
+            "window_end",
+            "target_channel",
+            "feishu_chat_id",
+            name="uq_digest_run_window",
         ),
     )
     op.create_index(op.f("ix_digest_runs_user_id"), "digest_runs", ["user_id"], unique=False)

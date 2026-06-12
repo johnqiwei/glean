@@ -2,14 +2,14 @@
 Unit tests for Daily Digest Service and Article Language Service.
 """
 
-from datetime import UTC, datetime, timedelta
-import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from glean_core.schemas.config import DigestConfig, FeishuConfig
-from glean_core.services.article_language_service import clean_html_to_text, ArticleLanguageService
+import pytest
+
+from glean_core.schemas.config import DigestConfig
+from glean_core.services.article_language_service import ArticleLanguageService, clean_html_to_text
 from glean_core.services.daily_digest_service import DailyDigestService
-from glean_database.models import User, Folder, Feed, Subscription, Entry, UserEntry, DigestRun, DigestItem
+from glean_database.models import Entry, Feed, Folder, Subscription, User
 
 
 def test_clean_html_to_text():
@@ -36,17 +36,17 @@ async def test_article_language_service_summarize(monkeypatch):
         llm_model="deepseek-v4-flash"
     )
     service = ArticleLanguageService(config)
-    
+
     # Mock LLM API call
     mock_call = AsyncMock(return_value="这是测试摘要内容，长度足够长以满足摘要要求。")
     monkeypatch.setattr(service, "_call_llm", mock_call)
-    
+
     entry = Entry(
         title="Test Title",
         summary="<p>Some test summary content to be summarized.</p>",
         content="<p>Full content text.</p>"
     )
-    
+
     summary = await service.summarize_to_zh(entry)
     assert summary == "这是测试摘要内容，长度足够长以满足摘要要求。"
     assert mock_call.called
@@ -113,6 +113,6 @@ async def test_daily_digest_service_classification(db_session):
     assert "AI" in categories
     assert feed1.id in categories["AI"]
     assert feed2.id in categories["AI"]
-    
+
     assert "Unclassified" in categories
     assert feed3.id in categories["Unclassified"]

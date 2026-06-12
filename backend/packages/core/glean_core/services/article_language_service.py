@@ -4,7 +4,6 @@ Article language and processing service.
 Handles HTML text cleaning, summarization, and translation via DeepSeek API.
 """
 
-from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
@@ -22,32 +21,31 @@ def clean_html_to_text(html: str | None) -> str:
     """
     if not html:
         return ""
-    
+
     # Parse with BeautifulSoup
     soup = BeautifulSoup(html, "html.parser")
-    
+
     # Remove script, style, iframe, svg etc.
     for tag in soup(["script", "style", "iframe", "svg", "img"]):
         tag.decompose()
-        
+
     # Convert links to Text (URL) format
     for a in soup.find_all("a"):
         href = a.get("href")
         text = a.get_text().strip()
         if href and text and href != text and href.startswith(("http://", "https://")):
             a.replace_with(f"{text} ({href})")
-            
+
     # Get separator-based text
     text = soup.get_text(separator="\n")
-    
+
     # Normalize lines and whitespace
     lines = [line.strip() for line in text.splitlines()]
     non_empty_lines = []
     for line in lines:
-        if line:
-            if not non_empty_lines or non_empty_lines[-1] != line:
-                non_empty_lines.append(line)
-                
+        if line and (not non_empty_lines or non_empty_lines[-1] != line):
+            non_empty_lines.append(line)
+
     return "\n\n".join(non_empty_lines)
 
 
@@ -77,7 +75,7 @@ class ArticleLanguageService:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        
+
         # Build API payload.
         # DeepSeek V4 Flash runs in non-thinking mode by default (standard chat).
         payload = {
@@ -92,7 +90,7 @@ class ArticleLanguageService:
 
         # Resolve completion URL
         url = self.base_url.rstrip("/") + "/chat/completions"
-        
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
                 response = await client.post(url, json=payload, headers=headers)
@@ -100,7 +98,7 @@ class ArticleLanguageService:
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
                 return str(content).strip()
-            except Exception as e:
+            except Exception:
                 logger.exception("LLM API call failed", extra={"url": url, "model": self.model})
                 raise
 
@@ -114,14 +112,14 @@ class ArticleLanguageService:
         source_text = ""
         if entry.summary:
             source_text = clean_html_to_text(entry.summary)
-        
+
         # If summary is too short or empty, use content
         if len(source_text) < 100 and entry.content:
             source_text = clean_html_to_text(entry.content)
-            
+
         if not source_text:
             source_text = entry.title
-            
+
         # Limit source text length sent to summarizer to avoid huge token usage
         if len(source_text) > 6000:
             source_text = source_text[:6000] + "\n...(Text truncated)..."
@@ -133,9 +131,9 @@ class ArticleLanguageService:
             "2. 长度严格控制在 120-200 个中文字符之间。\n"
             "3. 突出文章的核心事实、核心论点以及结论。"
         )
-        
+
         user_prompt = f"标题: {entry.title}\n\n内容:\n{source_text}"
-        
+
         try:
             summary = await self._call_llm(system_prompt, user_prompt)
             # Basic validation
@@ -154,11 +152,11 @@ class ArticleLanguageService:
         source_text = clean_html_to_text(entry.content or entry.summary)
         if not source_text:
             return "（该文章没有可用正文，请点击原链接阅读）"
-            
+
         # Split text into chunks if it is too long (approx 4000 characters per chunk)
         chunk_size = 4000
         chunks = [source_text[i:i + chunk_size] for i in range(0, len(source_text), chunk_size)]
-        
+
         system_prompt = (
             "你是一个专业的翻译官。请将以下文章段落翻译为中文。\n"
             "要求：\n"
@@ -166,7 +164,7 @@ class ArticleLanguageService:
             "2. 保持段落格式和逻辑结构。\n"
             "3. 只需要输出翻译后的文本，不要有任何你的解释、总结、前言或译者注。"
         )
-        
+
         translated_chunks = []
         for index, chunk in enumerate(chunks):
             logger.info(
@@ -184,5 +182,5 @@ class ArticleLanguageService:
                 )
                 # Fallback to original chunk if translation fails to prevent loss of content
                 translated_chunks.append(f"\n[翻译失败，保留原文]:\n{chunk}")
-                
+
         return "\n\n".join(translated_chunks)

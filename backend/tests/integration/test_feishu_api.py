@@ -4,14 +4,14 @@ Integration tests for Feishu Webhook API endpoints.
 
 import json
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
+
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
 
 from glean_core.schemas.config import DigestConfig, FeishuConfig
 from glean_core.services.typed_config_service import TypedConfigService
-from glean_database.models import User, Folder, Feed, Subscription, Entry, DigestRun, DigestItem
+from glean_database.models import DigestItem, DigestRun, Entry, Feed, Subscription, User
 
 
 @pytest.fixture
@@ -41,12 +41,12 @@ async def test_feishu_challenge(client: AsyncClient, setup_feishu_config):
         "type": "url_verification",
         "challenge": "test-feishu-challenge-code"
     }
-    
+
     response = await client.post(
         "/api/integrations/feishu/events",
         json=payload
     )
-    
+
     assert response.status_code == 200
     assert response.json() == {"challenge": "test-feishu-challenge-code"}
 

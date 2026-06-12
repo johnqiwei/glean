@@ -10,6 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from typing import Any
+
 import httpx
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -34,10 +35,10 @@ class AESCipher:
         # IV is the first 16 bytes of the decrypted string
         iv = encrypt_bytes[:16]
         cipher_text = encrypt_bytes[16:]
-        
+
         cipher = Cipher(algorithms.AES(self.key), modes.CBC(iv), backend=default_backend())
         decryptor = cipher.decryptor()
-        
+
         decrypted_bytes = decryptor.update(cipher_text) + decryptor.finalize()
         # Remove PKCS7 padding
         padding_len = decrypted_bytes[-1]
@@ -84,7 +85,7 @@ class FeishuBotClient:
                     return self._tenant_token
                 else:
                     raise ValueError(f"Failed to fetch tenant token: {data.get('msg')}")
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to fetch Feishu tenant access token")
                 raise
 
@@ -96,23 +97,23 @@ class FeishuBotClient:
     ) -> str:
         """
         Send a rich text (post) message to a Feishu chat.
-        
+
         Args:
             chat_id: Feishu Chat ID.
             title: Title of the post message.
             content: Rich text element structure.
-            
+
         Returns:
             The message ID of the sent message.
         """
         token = await self.get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id"
-        
+
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        
+
         # Structure the content payload as a JSON-serialized string
         msg_content = {
             "zh_cn": {
@@ -120,13 +121,13 @@ class FeishuBotClient:
                 "content": content,
             }
         }
-        
+
         payload = {
             "receive_id": chat_id,
             "msg_type": "post",
             "content": json.dumps(msg_content, ensure_ascii=False),
         }
-        
+
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 response = await client.post(url, json=payload, headers=headers)
@@ -138,7 +139,7 @@ class FeishuBotClient:
                     return str(message_id)
                 else:
                     raise ValueError(f"Failed to send Feishu message: {data.get('msg')}")
-            except Exception as e:
+            except Exception:
                 logger.exception("Feishu send_rich_text_message failed", extra={"chat_id": chat_id})
                 raise
 
@@ -148,17 +149,17 @@ class FeishuBotClient:
         """
         token = await self.get_tenant_access_token()
         url = f"https://open.feishu.cn/open-apis/im/v1/messages/{message_id}/reply"
-        
+
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        
+
         payload = {
             "msg_type": "text",
             "content": json.dumps({"text": text}, ensure_ascii=False),
         }
-        
+
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 response = await client.post(url, json=payload, headers=headers)
@@ -169,7 +170,7 @@ class FeishuBotClient:
                     return str(reply_id)
                 else:
                     raise ValueError(f"Failed to reply to Feishu message: {data.get('msg')}")
-            except Exception as e:
+            except Exception:
                 logger.exception("Feishu reply_text_message failed", extra={"message_id": message_id})
                 raise
 
@@ -182,7 +183,7 @@ class FeishuBotClient:
     ) -> bool:
         """
         Verify the signature of Feishu callbacks.
-        
+
         For security, the subscription event signature includes a timestamp, nonce,
         configured encrypt_key, and request body.
         """
