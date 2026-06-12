@@ -141,7 +141,7 @@ services:
     command: ["uv", "run", "--no-sync", "arq", "glean_worker.main.WorkerSettings"]
 
   web:
-    image: ghcr.io/leslieleung/glean-web:${IMAGE_TAG:-latest}
+    image: kix.ocir.io/axsyuak3izxh/glean-web:${IMAGE_TAG:-latest}
     container_name: glean-web
     ports:
       - "${WEB_PORT:-80}:80"
@@ -155,7 +155,7 @@ services:
     restart: unless-stopped
 
   admin:
-    image: ghcr.io/leslieleung/glean-admin:${IMAGE_TAG:-latest}
+    image: kix.ocir.io/axsyuak3izxh/glean-admin:${IMAGE_TAG:-latest}
     container_name: glean-admin
     ports:
       - "${ADMIN_PORT:-3001}:80"
