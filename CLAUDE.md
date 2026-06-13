@@ -339,3 +339,5 @@ Built applications will be in `frontend/apps/web/release/`.
 - You don't have to create documentation unless explicitly asked
 - Never run `make db-reset` without explicit user consent
 - Always write code comments in English
+- **Always Switch Back to Production DB**: Once any automated or manual testing is completed, you must switch the database configuration back to the production database (e.g. by commenting out `postgres_test_data` / `redis_test_data` volume overrides in `docker-compose.override.yml`). Leaving the environment connected to a test database breaks the live application and Bot services.
+

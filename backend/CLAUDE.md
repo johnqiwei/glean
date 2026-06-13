@@ -227,3 +227,5 @@ Configure in `.env` (copy from `.env.example`):
 - Always use `uv run` instead of `python` to ensure correct virtual environment
 - Never run `make db-reset` without explicit user consent
 - All code comments should be in English
+- **Always Switch Back to Production DB**: Once any automated or manual testing is completed, you must switch the database configuration back to the production database (e.g. by commenting out `postgres_test_data` / `redis_test_data` volume overrides in `docker-compose.override.yml`). Leaving the environment connected to a test database breaks the live application and Bot services.
+
