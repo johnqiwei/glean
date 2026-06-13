@@ -5,27 +5,30 @@ Handles message processing, validation, short-code resolution,
 and lazy translation for Feishu event messages.
 """
 
-import json
 import os
 import re
 import tempfile
-from datetime import UTC, datetime
-from typing import Any
+from contextlib import suppress
+from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from arq.connections import ArqRedis
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from glean_core import get_logger
+from glean_core.redis_keys import RedisKeys
 from glean_core.schemas.config import DigestConfig, FeishuConfig
 from glean_core.schemas.feishu import FeishuDigestMessage, FeishuDigestProcessResult
 from glean_core.services.article_language_service import ArticleLanguageService
 from glean_core.services.typed_config_service import TypedConfigService
-from glean_database.models import DigestItem, DigestRun, Entry
+from glean_database.models import DigestItem, DigestRun, Entry, UserEntry
 
 logger = get_logger(__name__)
 
-CODE_PATTERN = re.compile(r"\b[nN]\d{2}\b")
+CODE_PATTERN = re.compile(r"\b(?:(?P<date>\d{4})[\s_-]*)?(?P<code>[nN]\d{2})\b")
 MENTION_TEXT_PATTERN = re.compile(r"^\s*@\S+")
+SAFE_FILENAME_PART_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
 
 class FeishuDigestEventService:
@@ -62,7 +65,10 @@ class FeishuDigestEventService:
         if msg.chat_id != feishu_config.news_chat_id:
             logger.info(
                 "Message chat_id mismatch, ignored",
-                extra={"message_chat_id": msg.chat_id, "configured_chat_id": feishu_config.news_chat_id},
+                extra={
+                    "message_chat_id": msg.chat_id,
+                    "configured_chat_id": feishu_config.news_chat_id,
+                },
             )
             return FeishuDigestProcessResult(status="ignored")
 
@@ -89,39 +95,35 @@ class FeishuDigestEventService:
             mentions_bot = False
             # Check mentions from raw metadata
             raw_mentions = msg.raw.get("event", {}).get("message", {}).get("mentions", [])
-            if isinstance(raw_mentions, list) and raw_mentions:
-                mentions_bot = True
-            elif MENTION_TEXT_PATTERN.search(msg.text) is not None:
+            if (isinstance(raw_mentions, list) and raw_mentions) or (
+                MENTION_TEXT_PATTERN.search(msg.text) is not None
+            ):
                 mentions_bot = True
 
             if not mentions_bot:
                 logger.info("Mention required but not found in message")
                 return FeishuDigestProcessResult(status="mention_required")
 
-        # 5. Parse code (e.g. n01)
-        match = CODE_PATTERN.search(msg.text)
-        if not match:
+        # 5. Parse code (e.g. n01, 0612n01, 0612 n01)
+        parsed_code = self._parse_digest_code(msg.text, digest_config.timezone)
+        if not parsed_code:
             logger.info("No valid article code found in message text", extra={"text": msg.text})
             return FeishuDigestProcessResult(status="no_code_found")
 
-        code = match.group(0).lower()
+        code, target_date = parsed_code
 
-        # 6. Find the latest digest run sent to this chat
-        run_stmt = (
-            select(DigestRun)
-            .where(
-                DigestRun.feishu_chat_id == msg.chat_id,
-                DigestRun.status.in_(("sent", "partial_failed")),
-            )
-            .order_by(desc(DigestRun.created_at))
-            .limit(1)
+        # 6. Find digest run. Plain n01 uses latest run; MMDD+n01 uses that local date.
+        latest_run = await self._find_digest_run(
+            chat_id=msg.chat_id,
+            target_date=target_date,
+            timezone_name=digest_config.timezone,
         )
 
-        run_res = await self.db.execute(run_stmt)
-        latest_run = run_res.scalar_one_or_none()
-
         if not latest_run:
-            reply_text = "没有找到发送至该群的日报记录，请确认群ID配置是否正确。"
+            if target_date:
+                reply_text = f"没有找到 {target_date.strftime('%m%d')} 发送至该群的日报记录。"
+            else:
+                reply_text = "没有找到发送至该群的日报记录，请确认群ID配置是否正确。"
             outbox_file = await self._handle_reply(
                 msg.message_id, code, reply_text, write_to_outbox, outbox_dir
             )
@@ -194,6 +196,7 @@ class FeishuDigestEventService:
         outbox_file = await self._handle_reply(
             msg.message_id, code, full_message, write_to_outbox, outbox_dir
         )
+        await self._mark_entry_liked(digest_item.user_id, digest_item.entry_id)
 
         return FeishuDigestProcessResult(
             status="processed",
@@ -202,6 +205,111 @@ class FeishuDigestEventService:
             text=full_message,
             outbox_file=outbox_file,
         )
+
+    async def _find_digest_run(
+        self,
+        chat_id: str,
+        target_date: date | None,
+        timezone_name: str,
+    ) -> DigestRun | None:
+        stmt = (
+            select(DigestRun)
+            .where(
+                DigestRun.feishu_chat_id == chat_id,
+                DigestRun.status.in_(("sent", "partial_failed")),
+            )
+            .order_by(desc(DigestRun.created_at))
+        )
+
+        if target_date is None:
+            stmt = stmt.limit(1)
+        else:
+            timezone = self._get_timezone(timezone_name)
+            start_at = datetime.combine(target_date, time.min, tzinfo=timezone).astimezone(UTC)
+            end_at = datetime.combine(
+                target_date + timedelta(days=1), time.min, tzinfo=timezone
+            ).astimezone(UTC)
+            stmt = stmt.where(
+                DigestRun.created_at >= start_at, DigestRun.created_at < end_at
+            ).limit(1)
+
+        run_res = await self.db.execute(stmt)
+        return run_res.scalar_one_or_none()
+
+    async def _mark_entry_liked(self, user_id: str, entry_id: str) -> None:
+        stmt = select(UserEntry).where(UserEntry.user_id == user_id, UserEntry.entry_id == entry_id)
+        result = await self.db.execute(stmt)
+        user_entry = result.scalar_one_or_none()
+        old_is_liked = user_entry.is_liked if user_entry else None
+
+        if not user_entry:
+            user_entry = UserEntry(user_id=user_id, entry_id=entry_id)
+            self.db.add(user_entry)
+
+        now = datetime.now(UTC)
+        user_entry.is_liked = True
+        user_entry.liked_at = now
+        await self.db.commit()
+
+        if old_is_liked is True:
+            return
+
+        try:
+            debounce_key = RedisKeys.pref_update_debounce(user_id, entry_id, "like")
+            was_set = await self.redis.set(
+                debounce_key,
+                "1",
+                ex=RedisKeys.PREF_UPDATE_DEBOUNCE_TTL,
+                nx=True,
+            )
+            if was_set:
+                await self.redis.enqueue_job(
+                    "update_user_preference",
+                    user_id=user_id,
+                    entry_id=entry_id,
+                    signal_type="like",
+                )
+        except Exception as err:
+            logger.warning(
+                "Failed to queue preference update after Feishu like", extra={"error": str(err)}
+            )
+
+    @classmethod
+    def _parse_digest_code(cls, text: str, timezone_name: str) -> tuple[str, date | None] | None:
+        match = CODE_PATTERN.search(text)
+        if not match:
+            return None
+
+        code = match.group("code").lower()
+        date_prefix = match.group("date")
+        if not date_prefix:
+            return code, None
+
+        timezone = cls._get_timezone(timezone_name)
+        now = datetime.now(timezone).date()
+        month = int(date_prefix[:2])
+        day = int(date_prefix[2:])
+        try:
+            target_date = date(now.year, month, day)
+        except ValueError:
+            return None
+
+        if target_date > now:
+            try:
+                target_date = date(now.year - 1, month, day)
+            except ValueError:
+                return None
+        return code, target_date
+
+    @staticmethod
+    def _get_timezone(timezone_name: str) -> ZoneInfo:
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError:
+            logger.warning(
+                "Invalid digest timezone, falling back to UTC", extra={"timezone": timezone_name}
+            )
+            return ZoneInfo("UTC")
 
     async def _handle_reply(
         self,
@@ -222,7 +330,9 @@ class FeishuDigestEventService:
 
         now = datetime.now()
         timestamp = now.strftime("%Y-%m-%d_%H%M%S")
-        filename = f"daily_news_reply_{timestamp}_{message_id}_{code or 'error'}.txt"
+        safe_message_id = self._safe_filename_part(message_id)
+        safe_code = self._safe_filename_part(code or "error")
+        filename = f"daily_news_reply_{timestamp}_{safe_message_id}_{safe_code}.txt"
 
         # Ensure outbox directory exists
         os.makedirs(outbox_dir, exist_ok=True)
@@ -236,11 +346,17 @@ class FeishuDigestEventService:
             os.replace(temp_path, final_path)
             logger.info("Wrote reply file atomically", extra={"path": final_path})
             return final_path
-        except Exception as e:
+        except Exception:
             if os.path.exists(temp_path):
-                try:
+                with suppress(OSError):
                     os.remove(temp_path)
-                except OSError:
-                    pass
             logger.exception("Failed to write atomic reply file", extra={"filename": filename})
-            raise e
+            raise
+
+    @staticmethod
+    def _safe_filename_part(value: str) -> str:
+        """
+        Keep dispatcher outbox filenames inside the target directory.
+        """
+        safe_value = SAFE_FILENAME_PART_PATTERN.sub("_", value).strip("_")
+        return safe_value or "unknown"

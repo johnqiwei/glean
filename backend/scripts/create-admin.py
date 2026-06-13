@@ -92,7 +92,7 @@ async def create_admin(username: str, password: str, role: str, force: bool = Fa
                 if sys.stdin.isatty():
                     print(f"⚠️  Admin user '{username}' already exists.")
                     print(f"   ID: {existing_admin.id}")
-                    print(f"   Role: {existing_admin.role.value}")
+                    print(f"   Role: {existing_admin.role}")
                     response = (
                         input("\n   Do you want to delete and recreate? [y/N]: ").strip().lower()
                     )
@@ -118,7 +118,7 @@ async def create_admin(username: str, password: str, role: str, force: bool = Fa
             )
             print("✅ Admin user created successfully!")
             print(f"   Username: {admin.username}")
-            print(f"   Role: {admin.role.value}")
+            print(f"   Role: {admin.role}")
             print(f"   ID: {admin.id}")
             return True
         except Exception as e:

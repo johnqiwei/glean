@@ -3,6 +3,7 @@ Feishu integration schema definitions.
 """
 
 from typing import Any
+
 from pydantic import BaseModel, Field
 
 

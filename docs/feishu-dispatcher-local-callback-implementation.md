@@ -43,10 +43,12 @@ All changes have been implemented and verified. Below is the list of modificatio
    - Validates that incoming events belong to the configured `news_chat_id`.
    - Checks the sender against allowed user ID constraints (if any).
    - Verifies whether the bot is mentioned when `require_mention` is active.
-   - Normalizes and parses code text (e.g. `n01`, case-insensitive).
-   - Finds the latest `DigestRun` in `sent` or `partial_failed` status.
+   - Normalizes and parses current code text (e.g. `n01`, case-insensitive).
+   - Supports date-prefixed historical lookup with `MMDD+nXX` forms, including `0612n01`, `0612 n01`, `0612-n01`, and `0612_n01`.
+   - Finds the latest `DigestRun` in `sent` or `partial_failed` status for bare codes, or the matching local digest date for date-prefixed codes.
    - Retrieves the matching `DigestItem` and lazily translates fulltext via `ArticleLanguageService`.
    - Generates the reply files atomically using a temporary file prefix inside the same folder and renaming it to the final target to avoid dispatcher file scanner race conditions.
+   - Marks successfully fetched Feishu articles as liked in Glean and enqueues the normal `update_user_preference` job when the like state changes.
    - Exported this service in [services/\_\_init\_\_.py](file:///workspace/glean/backend/packages/core/glean_core/services/__init__.py).
 
 3. **FastAPI Endpoints**:
@@ -60,8 +62,17 @@ All changes have been implemented and verified. Below is the list of modificatio
    - Defined default overrides in [.env](file:///workspace/glean/.env).
    - Mounted the host directory path into the container volumes block inside [docker-compose.yml](file:///workspace/glean/docker-compose.yml):
      ```yaml
-     - /workspace/ocworkspace/feishu_outbox:/workspace/ocworkspace/feishu_outbox
+     - ${FEISHU_DISPATCHER_HOST_OUTBOX_DIR:-/mnt/workspace/ocworkspace/feishu_outbox}:/workspace/ocworkspace/feishu_outbox
      ```
+   - Passed `FEISHU_DISPATCHER_OUTBOX_DIR` and `FEISHU_DISPATCHER_CALLBACK_TOKEN` into the backend container environment.
+
+5. **Review Fixes Applied**:
+   - Corrected the compose bind-mount host path so the container writes into the actual dispatcher outbox on this host.
+   - Added `.env.example` entries for the dispatcher host outbox path, container outbox path, and callback token.
+   - Sanitized dynamic `message_id` and code filename segments before writing `daily_news_reply_*.txt`.
+   - Preserved original exception tracebacks when atomic outbox writes fail.
+   - Added historical code lookup so today's articles can still use `n01`, while older digests can use an `MMDD` prefix.
+   - Added liked-state persistence for articles retrieved through Feishu.
 
 ### B. Feishu Dispatcher Project (`ocworkspace`)
 
@@ -85,6 +96,7 @@ New integration tests were added in [test_feishu_api.py](file:///workspace/glean
 - `test_internal_feishu_callback_unauthorized`: Verifies that endpoints reject unauthorized or missing bearer token headers with `401` or `403`.
 - `test_internal_feishu_callback_success`: Verifies successful processing of internal callback events, ensuring the lazy translation is committed and the outbox file is created atomically containing correct article body text.
 - `test_internal_feishu_callback_deduplicated`: Verifies that duplicates return `"deduplicated"` status immediately and do not generate extra outbox files.
+- `test_internal_feishu_callback_date_prefixed_code_selects_historical_run`: Verifies that `MMDD+nXX` resolves a previous digest while bare `nXX` still resolves the latest digest.
 
 ### Test Verification
 The full backend test suite was run and passed completely:

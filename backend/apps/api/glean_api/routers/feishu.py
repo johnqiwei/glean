@@ -13,7 +13,7 @@ from typing import Annotated, Any
 
 from arq.connections import ArqRedis
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Security, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from glean_api.config import settings
@@ -33,7 +33,7 @@ security = HTTPBearer(auto_error=False)
 
 
 async def verify_internal_token(
-    credentials: HTTPAuthorizationCredentials | None = Security(security)
+    credentials: HTTPAuthorizationCredentials | None = Security(security),
 ) -> None:
     """Verify the bearer token for internal callback requests."""
     if not credentials:
@@ -222,7 +222,9 @@ async def handle_feishu_events(
         if result.text:
             # Feishu has a limit of 10000 characters per message, chunk to 9000
             chunk_size = 9000
-            message_chunks = [result.text[i : i + chunk_size] for i in range(0, len(result.text), chunk_size)]
+            message_chunks = [
+                result.text[i : i + chunk_size] for i in range(0, len(result.text), chunk_size)
+            ]
 
             for chunk in message_chunks:
                 await feishu_client.reply_text_message(message_id, chunk)

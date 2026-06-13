@@ -80,10 +80,13 @@ services:
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-sentence-transformers}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-all-MiniLM-L6-v2}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+      # Feishu dispatcher local callback configuration
+      FEISHU_DISPATCHER_OUTBOX_DIR: ${FEISHU_DISPATCHER_OUTBOX_DIR:-/workspace/ocworkspace/feishu_outbox}
+      FEISHU_DISPATCHER_CALLBACK_TOKEN: ${FEISHU_DISPATCHER_CALLBACK_TOKEN:-}
     volumes:
       - glean_logs:/app/logs
       - hf_cache:/app/model_cache
-      - /workspace/ocworkspace/feishu_outbox:/workspace/ocworkspace/feishu_outbox
+      - ${FEISHU_DISPATCHER_HOST_OUTBOX_DIR:-/mnt/workspace/ocworkspace/feishu_outbox}:/workspace/ocworkspace/feishu_outbox
     depends_on:
       postgres:
         condition: service_healthy
