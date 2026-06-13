@@ -342,6 +342,7 @@ class FeishuDigestEventService:
         try:
             with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
                 f.write(text)
+            os.chmod(temp_path, 0o666)
             final_path = os.path.join(outbox_dir, filename)
             os.replace(temp_path, final_path)
             logger.info("Wrote reply file atomically", extra={"path": final_path})
