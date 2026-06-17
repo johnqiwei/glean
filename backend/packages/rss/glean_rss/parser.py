@@ -5,6 +5,7 @@ Parses RSS and Atom feeds using feedparser.
 """
 
 import html
+import re
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -93,8 +94,18 @@ class ParsedEntry:
         # Track whether the feed provides actual content or just summary/description
         content_list = data.get("content", [])
         if content_list:
-            self.content = content_list[0].get("value")
-            self.has_full_content = True  # Feed provides content field
+            feed_content = str(content_list[0].get("value") or "")
+            # Check if this content is likely a full article or just a media caption/short snippet.
+            # 1. Full articles are typically longer than 250 characters.
+            # 2. Full articles should be longer than or equal to their summary.
+            summary_text = re.sub(r"<[^>]*>", "", self.summary or "")
+            content_text = re.sub(r"<[^>]*>", "", feed_content)
+
+            self.content = feed_content
+            if len(content_text) > 250 and len(content_text) >= len(summary_text):
+                self.has_full_content = True  # Feed provides true full content field
+            else:
+                self.has_full_content = False  # Likely a media description or too short
         else:
             self.content = data.get("summary")
             self.has_full_content = (

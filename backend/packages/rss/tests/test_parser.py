@@ -1,6 +1,6 @@
 """Tests for RSS parser."""
 
-from glean_rss.parser import _get_favicon_url
+from glean_rss.parser import _get_favicon_url, ParsedEntry
 
 
 class TestFaviconURL:
@@ -49,3 +49,48 @@ class TestFaviconURL:
         """Test favicon URL generation with relative URL."""
         result = _get_favicon_url("/blog/feed")
         assert result is None
+
+
+class TestParsedEntry:
+    """Test ParsedEntry content extraction logic."""
+
+    def test_parsed_entry_with_true_full_content(self) -> None:
+        """Test entry with a long content block that qualifies as full content."""
+        data = {
+            "id": "1",
+            "link": "https://example.com/1",
+            "title": "Test Title",
+            "summary": "This is a brief summary of the test entry.",
+            "content": [
+                {
+                    "type": "text/html",
+                    "value": "This is a much longer body of text that represents the actual article content. "
+                             "It needs to exceed 250 characters in total length to qualify. "
+                             "Let's add some more sentences here to ensure we cross that threshold. "
+                             "A healthy amount of prose is critical for full content detection, "
+                             "so we keep typing until the character count is comfortably over 250 characters."
+                }
+            ]
+        }
+        entry = ParsedEntry(data)
+        assert entry.has_full_content is True
+        assert entry.content.startswith("This is a much longer body")
+
+    def test_parsed_entry_with_short_caption_content(self) -> None:
+        """Test entry with content that is too short (e.g. an image caption) and should be rejected."""
+        data = {
+            "id": "2",
+            "link": "https://example.com/2",
+            "title": "Test Title 2",
+            "summary": "This is a brief summary of the test entry that is longer than the content caption.",
+            "content": [
+                {
+                    "type": "text/plain",
+                    "value": "An image caption."
+                }
+            ]
+        }
+        entry = ParsedEntry(data)
+        assert entry.has_full_content is False
+        assert entry.content == "An image caption."
+

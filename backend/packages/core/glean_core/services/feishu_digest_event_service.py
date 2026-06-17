@@ -26,7 +26,10 @@ from glean_database.models import DigestItem, DigestRun, Entry, UserEntry
 
 logger = get_logger(__name__)
 
-CODE_PATTERN = re.compile(r"\b(?:(?P<date>\d{4})[\s_-]*)?(?P<code>[nN]\d{2})\b")
+CODE_PATTERN = re.compile(
+    r"(?<!\w)(?:(?P<date>\d{4})[\s_-]*)?(?:(?:news|n)\s*|#)\s*0*(?P<number>\d{1,3})\b",
+    re.IGNORECASE,
+)
 MENTION_TEXT_PATTERN = re.compile(r"^\s*@\S+")
 SAFE_FILENAME_PART_PATTERN = re.compile(r"[^A-Za-z0-9_-]+")
 
@@ -88,7 +91,13 @@ class FeishuDigestEventService:
                     "Sender not in allowed users list",
                     extra={"open_id": open_id, "user_id": user_id},
                 )
-                return FeishuDigestProcessResult(status="user_not_allowed")
+                reply_text = "抱歉，你没有权限获取日报详情。"
+                outbox_file = await self._handle_reply(
+                    msg.message_id, None, reply_text, write_to_outbox, outbox_dir
+                )
+                return FeishuDigestProcessResult(
+                    status="user_not_allowed", text=reply_text, outbox_file=outbox_file
+                )
 
         # 4. Check mention requirement
         if feishu_config.require_mention:
@@ -104,104 +113,100 @@ class FeishuDigestEventService:
                 logger.info("Mention required but not found in message")
                 return FeishuDigestProcessResult(status="mention_required")
 
-        # 5. Parse code (e.g. n01, 0612n01, 0612 n01)
-        parsed_code = self._parse_digest_code(msg.text, digest_config.timezone)
-        if not parsed_code:
+        # 5. Parse codes (e.g. n01, n01 n02, #1 #2, 0612n01)
+        parsed_codes = self._parse_digest_codes(msg.text, digest_config.timezone)
+        if not parsed_codes:
             logger.info("No valid article code found in message text", extra={"text": msg.text})
-            return FeishuDigestProcessResult(status="no_code_found")
-
-        code, target_date = parsed_code
-
-        # 6. Find digest run. Plain n01 uses latest run; MMDD+n01 uses that local date.
-        latest_run = await self._find_digest_run(
-            chat_id=msg.chat_id,
-            target_date=target_date,
-            timezone_name=digest_config.timezone,
-        )
-
-        if not latest_run:
-            if target_date:
-                reply_text = f"没有找到 {target_date.strftime('%m%d')} 发送至该群的日报记录。"
-            else:
-                reply_text = "没有找到发送至该群的日报记录，请确认群ID配置是否正确。"
+            reply_text = "没有识别到文章编号。请按日报里的格式发送，例如：@Glean n01，或 @Glean #1。"
             outbox_file = await self._handle_reply(
-                msg.message_id, code, reply_text, write_to_outbox, outbox_dir
+                msg.message_id, None, reply_text, write_to_outbox, outbox_dir
             )
             return FeishuDigestProcessResult(
-                status="run_not_found", text=reply_text, outbox_file=outbox_file
+                status="no_code_found", text=reply_text, outbox_file=outbox_file
             )
 
-        # 7. Find digest item
-        item_stmt = select(DigestItem).where(
-            DigestItem.run_id == latest_run.id,
-            DigestItem.code == code,
-        )
-        item_res = await self.db.execute(item_stmt)
-        digest_item = item_res.scalar_one_or_none()
+        run_cache: dict[date | None, DigestRun | None] = {}
+        lang_service = ArticleLanguageService(digest_config)
+        reply_parts: list[str] = []
+        success_codes: list[str] = []
+        success_entry_ids: list[str] = []
+        error_statuses: list[str] = []
 
-        if not digest_item:
-            reply_text = f"没有找到编号 {code} 对应的文章，请确认该编号来自最近的日报。"
-            outbox_file = await self._handle_reply(
-                msg.message_id, code, reply_text, write_to_outbox, outbox_dir
+        for code, target_date in parsed_codes:
+            if target_date not in run_cache:
+                run_cache[target_date] = await self._find_digest_run(
+                    chat_id=msg.chat_id,
+                    target_date=target_date,
+                    timezone_name=digest_config.timezone,
+                )
+            latest_run = run_cache[target_date]
+
+            if not latest_run:
+                if target_date:
+                    reply_parts.append(f"【{code}】没有找到 {target_date.strftime('%m%d')} 发送至该群的日报记录。")
+                else:
+                    reply_parts.append(f"【{code}】没有找到发送至该群的日报记录，请确认群ID配置是否正确。")
+                error_statuses.append("run_not_found")
+                continue
+
+            item_stmt = select(DigestItem).where(
+                DigestItem.run_id == latest_run.id,
+                DigestItem.code == code,
             )
-            return FeishuDigestProcessResult(
-                status="item_not_found", code=code, text=reply_text, outbox_file=outbox_file
-            )
+            item_res = await self.db.execute(item_stmt)
+            digest_item = item_res.scalar_one_or_none()
 
-        # 8. Lazy translate fulltext to Chinese
-        if not digest_item.fulltext_zh:
-            # Load entry
-            entry_stmt = select(Entry).where(Entry.id == digest_item.entry_id)
-            entry_res = await self.db.execute(entry_stmt)
-            entry = entry_res.scalar_one_or_none()
+            if not digest_item:
+                reply_parts.append(f"【{code}】没有找到对应的文章，请确认该编号来自该日报。")
+                error_statuses.append("item_not_found")
+                continue
 
-            if not entry:
-                reply_text = "抱歉，该文章的源正文不存在，请尝试点击日报中的原文链接阅读。"
-                outbox_file = await self._handle_reply(
-                    msg.message_id, code, reply_text, write_to_outbox, outbox_dir
-                )
-                return FeishuDigestProcessResult(
-                    status="entry_not_found",
-                    code=code,
-                    entry_id=digest_item.entry_id,
-                    text=reply_text,
-                    outbox_file=outbox_file,
-                )
+            if not digest_item.fulltext_zh:
+                entry_stmt = select(Entry).where(Entry.id == digest_item.entry_id)
+                entry_res = await self.db.execute(entry_stmt)
+                entry = entry_res.scalar_one_or_none()
 
-            # Translate content
-            lang_service = ArticleLanguageService(digest_config)
-            try:
-                fulltext_zh = await lang_service.translate_fulltext_to_zh(entry)
-                digest_item.fulltext_zh = fulltext_zh
-                digest_item.fulltext_generated_at = datetime.now(UTC)
-                await self.db.commit()
-            except Exception as trans_err:
-                logger.exception("Failed to translate entry fulltext", extra={"entry_id": entry.id})
-                reply_text = f"翻译正文失败，请稍后重试。错误信息: {trans_err}"
-                outbox_file = await self._handle_reply(
-                    msg.message_id, code, reply_text, write_to_outbox, outbox_dir
-                )
-                return FeishuDigestProcessResult(
-                    status="translation_failed",
-                    code=code,
-                    entry_id=digest_item.entry_id,
-                    text=reply_text,
-                    outbox_file=outbox_file,
-                )
+                if not entry:
+                    reply_parts.append(f"【{code}】抱歉，该文章的源正文不存在，请尝试点击日报中的原文链接阅读。")
+                    error_statuses.append("entry_not_found")
+                    continue
 
-        fulltext_zh = digest_item.fulltext_zh or "（未生成有效翻译正文）"
-        header_text = f"【{digest_item.title_zh or '正文'}】\n\n"
-        full_message = header_text + fulltext_zh
+                try:
+                    fulltext_zh = await lang_service.translate_fulltext_to_zh(entry)
+                    digest_item.fulltext_zh = fulltext_zh
+                    digest_item.fulltext_generated_at = datetime.now(UTC)
+                    await self.db.commit()
+                except Exception as trans_err:
+                    logger.exception("Failed to translate entry fulltext", extra={"entry_id": entry.id})
+                    reply_parts.append(f"【{code}】翻译正文失败，请稍后重试。错误信息: {trans_err}")
+                    error_statuses.append("translation_failed")
+                    continue
 
+            fulltext_zh = digest_item.fulltext_zh or "（未生成有效翻译正文）"
+            reply_parts.append(f"【{code} · {digest_item.title_zh or '正文'}】\n\n{fulltext_zh}")
+            success_codes.append(code)
+            success_entry_ids.append(digest_item.entry_id)
+            await self._mark_entry_liked(digest_item.user_id, digest_item.entry_id)
+
+        full_message = "\n\n---\n\n".join(reply_parts)
+        requested_codes = [code for code, _ in parsed_codes]
         outbox_file = await self._handle_reply(
-            msg.message_id, code, full_message, write_to_outbox, outbox_dir
+            msg.message_id,
+            "_".join(success_codes or requested_codes),
+            full_message,
+            write_to_outbox,
+            outbox_dir,
         )
-        await self._mark_entry_liked(digest_item.user_id, digest_item.entry_id)
+
+        if success_codes:
+            status = "processed" if not error_statuses else "partial_processed"
+        else:
+            status = error_statuses[0] if error_statuses else "item_not_found"
 
         return FeishuDigestProcessResult(
-            status="processed",
-            code=code,
-            entry_id=digest_item.entry_id,
+            status=status,
+            code=",".join(requested_codes),
+            entry_id=",".join(success_entry_ids) if success_entry_ids else None,
             text=full_message,
             outbox_file=outbox_file,
         )
@@ -276,30 +281,45 @@ class FeishuDigestEventService:
 
     @classmethod
     def _parse_digest_code(cls, text: str, timezone_name: str) -> tuple[str, date | None] | None:
-        match = CODE_PATTERN.search(text)
-        if not match:
-            return None
+        codes = cls._parse_digest_codes(text, timezone_name)
+        return codes[0] if codes else None
 
-        code = match.group("code").lower()
-        date_prefix = match.group("date")
-        if not date_prefix:
-            return code, None
+    @classmethod
+    def _parse_digest_codes(cls, text: str, timezone_name: str) -> list[tuple[str, date | None]]:
+        parsed_codes: list[tuple[str, date | None]] = []
+        seen: set[tuple[str, date | None]] = set()
 
-        timezone = cls._get_timezone(timezone_name)
-        now = datetime.now(timezone).date()
-        month = int(date_prefix[:2])
-        day = int(date_prefix[2:])
-        try:
-            target_date = date(now.year, month, day)
-        except ValueError:
-            return None
+        for match in CODE_PATTERN.finditer(text):
+            code = f"n{int(match.group('number')):02d}"
+            date_prefix = match.group("date")
+            if not date_prefix:
+                parsed = (code, None)
+                if parsed not in seen:
+                    seen.add(parsed)
+                    parsed_codes.append(parsed)
+                continue
 
-        if target_date > now:
+            timezone = cls._get_timezone(timezone_name)
+            now = datetime.now(timezone).date()
+            month = int(date_prefix[:2])
+            day = int(date_prefix[2:])
             try:
-                target_date = date(now.year - 1, month, day)
+                target_date = date(now.year, month, day)
             except ValueError:
-                return None
-        return code, target_date
+                continue
+
+            if target_date > now:
+                try:
+                    target_date = date(now.year - 1, month, day)
+                except ValueError:
+                    continue
+
+            parsed = (code, target_date)
+            if parsed not in seen:
+                seen.add(parsed)
+                parsed_codes.append(parsed)
+
+        return parsed_codes
 
     @staticmethod
     def _get_timezone(timezone_name: str) -> ZoneInfo:

@@ -307,6 +307,227 @@ async def test_internal_feishu_callback_success(
 
 
 @pytest.mark.asyncio
+async def test_internal_feishu_callback_accepts_hash_number_code(
+    client: AsyncClient, db_session, setup_feishu_config, monkeypatch, tmp_path
+):
+    """A user can request details as @bot #1, not only @bot n01."""
+    user = User(
+        id="user_test_123",
+        email="feishu.user@example.com",
+        name="Feishu User",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    feed = Feed(url="https://feed.example.com/hash", title="Feishu Hash Feed")
+    db_session.add(feed)
+    await db_session.commit()
+
+    entry = Entry(
+        feed_id=feed.id,
+        url="https://article.example.com/hash",
+        title="Hash Code News",
+        content="<p>hash code</p>",
+        embedding_status="done",
+    )
+    db_session.add(entry)
+    await db_session.commit()
+
+    run = DigestRun(
+        user_id=user.id,
+        window_start=datetime.now() - timedelta(hours=24),
+        window_end=datetime.now(),
+        status="sent",
+        target_channel="feishu",
+        feishu_chat_id="chat_test_123",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    item = DigestItem(
+        run_id=run.id,
+        user_id=user.id,
+        folder_id=None,
+        category_name="Unclassified",
+        entry_id=entry.id,
+        code="n01",
+        rank=1,
+        score=95.0,
+        title_zh="编号新闻",
+        summary_zh="编号摘要",
+        fulltext_zh="编号正文",
+    )
+    db_session.add(item)
+    await db_session.commit()
+
+    from glean_api.config import settings
+
+    monkeypatch.setattr(settings, "feishu_dispatcher_callback_token", "test_internal_token")
+    monkeypatch.setattr(settings, "feishu_dispatcher_outbox_dir", str(tmp_path))
+
+    payload = {
+        "message_id": "om_message_hash_code",
+        "chat_id": "chat_test_123",
+        "text": "@Glean #1",
+        "sender": {"open_id": "usr_test_123", "user_id": "usr_test_123"},
+    }
+    headers = {"Authorization": "Bearer test_internal_token"}
+
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "processed"
+    assert data["code"] == "n01"
+    with open(data["outbox_file"], encoding="utf-8") as f:
+        assert "编号正文" in f.read()
+
+
+@pytest.mark.asyncio
+async def test_internal_feishu_callback_accepts_multiple_codes(
+    client: AsyncClient, db_session, setup_feishu_config, monkeypatch, tmp_path
+):
+    """A single mention can request multiple article details."""
+    user = User(
+        id="user_test_123",
+        email="feishu.user@example.com",
+        name="Feishu User",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    feed = Feed(url="https://feed.example.com/multiple", title="Feishu Multiple Feed")
+    db_session.add(feed)
+    await db_session.commit()
+
+    entry_one = Entry(
+        feed_id=feed.id,
+        url="https://article.example.com/multiple-1",
+        title="First News",
+        content="<p>first</p>",
+        embedding_status="done",
+    )
+    entry_two = Entry(
+        feed_id=feed.id,
+        url="https://article.example.com/multiple-2",
+        title="Second News",
+        content="<p>second</p>",
+        embedding_status="done",
+    )
+    db_session.add_all([entry_one, entry_two])
+    await db_session.commit()
+
+    run = DigestRun(
+        user_id=user.id,
+        window_start=datetime.now() - timedelta(hours=24),
+        window_end=datetime.now(),
+        status="sent",
+        target_channel="feishu",
+        feishu_chat_id="chat_test_123",
+    )
+    db_session.add(run)
+    await db_session.commit()
+
+    db_session.add_all(
+        [
+            DigestItem(
+                run_id=run.id,
+                user_id=user.id,
+                folder_id=None,
+                category_name="Unclassified",
+                entry_id=entry_one.id,
+                code="n01",
+                rank=1,
+                score=95.0,
+                title_zh="第一条新闻",
+                summary_zh="第一条摘要",
+                fulltext_zh="第一条正文",
+            ),
+            DigestItem(
+                run_id=run.id,
+                user_id=user.id,
+                folder_id=None,
+                category_name="Unclassified",
+                entry_id=entry_two.id,
+                code="n02",
+                rank=2,
+                score=90.0,
+                title_zh="第二条新闻",
+                summary_zh="第二条摘要",
+                fulltext_zh="第二条正文",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    from glean_api.config import settings
+
+    monkeypatch.setattr(settings, "feishu_dispatcher_callback_token", "test_internal_token")
+    monkeypatch.setattr(settings, "feishu_dispatcher_outbox_dir", str(tmp_path))
+
+    payload = {
+        "message_id": "om_message_multiple_codes",
+        "chat_id": "chat_test_123",
+        "text": "@Glean n01 n02",
+        "sender": {"open_id": "usr_test_123", "user_id": "usr_test_123"},
+    }
+    headers = {"Authorization": "Bearer test_internal_token"}
+
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "processed"
+    assert data["code"] == "n01,n02"
+    assert entry_one.id in data["entry_id"]
+    assert entry_two.id in data["entry_id"]
+    with open(data["outbox_file"], encoding="utf-8") as f:
+        content = f.read()
+        assert "【n01 · 第一条新闻】" in content
+        assert "第一条正文" in content
+        assert "【n02 · 第二条新闻】" in content
+        assert "第二条正文" in content
+        assert "\n\n---\n\n" in content
+
+    liked_result = await db_session.execute(
+        select(UserEntry).where(
+            UserEntry.user_id == user.id,
+            UserEntry.entry_id.in_([entry_one.id, entry_two.id]),
+        )
+    )
+    liked_states = liked_result.scalars().all()
+    assert len(liked_states) == 2
+    assert all(state.is_liked is True for state in liked_states)
+
+
+@pytest.mark.asyncio
+async def test_internal_feishu_callback_no_code_writes_help_reply(
+    client: AsyncClient, setup_feishu_config, monkeypatch, tmp_path
+):
+    """Mentioned messages that do not contain a code should not fail silently."""
+    from glean_api.config import settings
+
+    monkeypatch.setattr(settings, "feishu_dispatcher_callback_token", "test_internal_token")
+    monkeypatch.setattr(settings, "feishu_dispatcher_outbox_dir", str(tmp_path))
+
+    payload = {
+        "message_id": "om_message_no_code",
+        "chat_id": "chat_test_123",
+        "text": "@Glean detail please",
+        "sender": {"open_id": "usr_test_123", "user_id": "usr_test_123"},
+    }
+    headers = {"Authorization": "Bearer test_internal_token"}
+
+    response = await client.post("/api/internal/feishu/messages", json=payload, headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "no_code_found"
+    assert data["outbox_file"] is not None
+    with open(data["outbox_file"], encoding="utf-8") as f:
+        assert "@Glean n01" in f.read()
+
+
+@pytest.mark.asyncio
 async def test_internal_feishu_callback_date_prefixed_code_selects_historical_run(
     client: AsyncClient, db_session, setup_feishu_config, monkeypatch, tmp_path
 ):

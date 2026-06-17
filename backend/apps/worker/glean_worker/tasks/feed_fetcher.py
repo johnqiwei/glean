@@ -132,10 +132,12 @@ async def fetch_feed_task(ctx: dict[str, Any], feed_id: str) -> dict[str, str | 
                         "Entry has no full content, fetching from URL",
                         extra={"feed_id": feed_id, "url": parsed_entry.url},
                     )
+                    extracted_successfully = False
                     try:
                         extracted_content = await fetch_and_extract_fulltext(parsed_entry.url)
                         if extracted_content:
                             entry_content = extracted_content
+                            extracted_successfully = True
                             logger.info(
                                 "Successfully extracted full text",
                                 extra={
@@ -145,14 +147,24 @@ async def fetch_feed_task(ctx: dict[str, Any], feed_id: str) -> dict[str, str | 
                             )
                         else:
                             logger.warning(
-                                "Full text extraction returned empty, using summary",
+                                "Full text extraction returned empty, using fallback content",
                                 extra={"feed_id": feed_id},
                             )
                     except Exception as extract_err:
                         logger.warning(
-                            "Full text extraction failed, using summary",
+                            "Full text extraction failed, using fallback content",
                             extra={"feed_id": feed_id, "error": str(extract_err)},
                         )
+
+                    if not extracted_successfully:
+                        # Fallback: if summary exists and is longer than current entry_content, use summary
+                        if parsed_entry.summary and (not entry_content or len(parsed_entry.summary) > len(entry_content)):
+                            entry_content = parsed_entry.summary
+                        # Process fallback content
+                        if entry_content:
+                            entry_content = await postprocess_html(
+                                entry_content, base_url=parsed_entry.url
+                            )
                 else:
                     # Process content from feed to fix backtick formatting etc.
                     if entry_content:
