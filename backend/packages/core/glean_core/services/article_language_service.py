@@ -4,6 +4,8 @@ Article language and processing service.
 Handles HTML text cleaning, summarization, and translation via DeepSeek API.
 """
 
+import re
+
 import httpx
 from bs4 import BeautifulSoup
 
@@ -12,6 +14,13 @@ from glean_core.schemas.config import DigestConfig
 from glean_database.models import Entry
 
 logger = get_logger(__name__)
+
+DETAIL_STOP_SECTION_PATTERNS = [
+    r"ai\s*news\s*(?:website|site|网站)",
+    r"ai\s*(?:twitter|x)\s*recap",
+    r"ai\s*推特\s*回顾",
+    r"推特\s*回顾",
+]
 
 
 def clean_html_to_text(html: str | None) -> str:
@@ -47,6 +56,45 @@ def clean_html_to_text(html: str | None) -> str:
             non_empty_lines.append(line)
 
     return "\n\n".join(non_empty_lines)
+
+
+def filter_detail_source_text(text: str, title: str | None = None) -> str:
+    """
+    Remove trailing newsletter sections that readability can attach to a single article.
+    """
+    if not text:
+        return ""
+
+    title_normalized = (title or "").strip().casefold()
+    lines = text.splitlines()
+    kept_lines: list[str] = []
+    non_empty_seen = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped:
+            non_empty_seen += 1
+
+        if non_empty_seen > 1 and stripped and _is_unrelated_detail_section(stripped):
+            if title_normalized and stripped.casefold() in title_normalized:
+                kept_lines.append(line)
+                continue
+            break
+
+        kept_lines.append(line)
+
+    return "\n".join(kept_lines).strip()
+
+
+def _is_unrelated_detail_section(line: str) -> bool:
+    heading = line.strip().strip("#:：- ")
+    if not heading or len(heading) > 80:
+        return False
+
+    return any(
+        re.fullmatch(pattern, heading, flags=re.IGNORECASE)
+        for pattern in DETAIL_STOP_SECTION_PATTERNS
+    )
 
 
 class ArticleLanguageService:
@@ -149,7 +197,10 @@ class ArticleLanguageService:
         Translate the entry's full-text content into Chinese.
         If the text is too long, splits it into chunks and merges the translation.
         """
-        source_text = clean_html_to_text(entry.content or entry.summary)
+        source_text = filter_detail_source_text(
+            clean_html_to_text(entry.content or entry.summary),
+            entry.title,
+        )
         if not source_text:
             return "（该文章没有可用正文，请点击原链接阅读）"
 
