@@ -1,8 +1,11 @@
 # Override file for local development builds
-# Usage: docker compose up -d (automatically uses docker-compose.yml + docker-compose.override.yml)
-# Or: docker compose -f docker-compose.full.yml -f docker-compose.override.yml up -d
+# Usage:
+#   docker compose up -d          -> pulls pre-built images from OCIR (fast restart)
+#   docker compose up --build -d  -> rebuilds from local code (after code changes)
 #
-# This override uses separate test volumes to avoid conflicts with dev database.
+# The build context is defined here so --build knows where to find the source.
+# The image name is inherited from docker-compose.yml (OCIR registry).
+#
 # To completely reset test data: docker compose down -v
 
 # services:
@@ -19,13 +22,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: glean-backend:local
 
   worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: glean-backend:local
 
 # volumes:
 #   postgres_test_data:

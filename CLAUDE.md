@@ -49,6 +49,19 @@ IMAGE_TAG=v0.3.0-alpha.1 docker compose up -d
 # Or set in .env: IMAGE_TAG=v0.3.0-alpha.1
 ```
 
+### After System Reboot
+
+The `glean-backend:local` image is built locally via `docker-compose.override.yml`.
+After a reboot (especially an unclean one), Docker may lose cached images and the
+backend will need to rebuild. Use `docker compose up --build -d` to trigger a rebuild.
+
+If Docker reports `blob not found` errors, the containerd content store is corrupted.
+Use the unified startup script to recover all services (glean, geco, stdata):
+
+```bash
+sudo bash /mnt/workspace/start-services.sh
+```
+
 ### Development Environment
 
 ```bash
